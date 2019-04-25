@@ -12,7 +12,7 @@ class Agent:
         self.memory = deque(maxlen=2000) # double-ended queue; acts like list, but elements can be added/removed from either end
         self.gamma = 0.95 # decay or discount rate: enables agent to take into account future actions in addition to the immediate ones, but discounted at this rate
         self.epsilon = 1.0 # exploration rate: how much to act randomly; more initially than later due to epsilon decay
-        self.epsilon_decay = 0.995 # decrease number of random explorations as the agent's performance (hopefully) improves over time
+        self.epsilon_decay = 0.9995 # decrease number of random explorations as the agent's performance (hopefully) improves over time
         self.epsilon_min = 0.01 # minimum amount of random exploration permitted
         self.learning_rate = 0.001 # rate at which NN adjusts models parameters via SGD to reduce cost 
         self.model = self._build_model() # private method 
