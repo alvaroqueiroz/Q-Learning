@@ -1,20 +1,23 @@
+import keras
 from keras import layers
 from keras import models
 from keras.optimizers import adam
 import tensorflow as tf
-from collections import deque
 import random
 import numpy as np
+from keras.models import load_model
+import cv2
+import time
+
 class Agent:
     def __init__(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
-        self.memory = deque(maxlen=2000) # double-ended queue; acts like list, but elements can be added/removed from either end
-        self.gamma = 0.95 # decay or discount rate: enables agent to take into account future actions in addition to the immediate ones, but discounted at this rate
-        self.epsilon = 1.0 # exploration rate: how much to act randomly; more initially than later due to epsilon decay
-        self.epsilon_decay = 0.9995 # decrease number of random explorations as the agent's performance (hopefully) improves over time
+        self.gamma = 0.5 # decay or discount rate: enables agent to take into account future actions in addition to the immediate ones, but discounted at this rate
+        self.epsilon = 1 # exploration rate: how much to act randomly; more initially than later due to epsilon decay
+        self.epsilon_decay = 0.999 # decrease number of random explorations as the agent's performance (hopefully) improves over time
         self.epsilon_min = 0.01 # minimum amount of random exploration permitted
-        self.learning_rate = 0.001 # rate at which NN adjusts models parameters via SGD to reduce cost 
+        self.learning_rate = 0.05 # rate at which NN adjusts models parameters via Adam to reduce cost 
         self.model = self._build_model() # private method 
     
     def _build_model(self):
@@ -109,37 +112,204 @@ class Agent:
         
         model = models.Model(inputs=[image_tensor], outputs=[network_output])
 
-        optimizer = adam(lr = self.learning_rate)
-
+        optimizer = adam(lr = self.learning_rate, clipvalue=1)
+        
         model.compile(optimizer=optimizer, 
                     loss='mean_squared_error',
                     metrics=['mae'])
         return model
     
     def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done)) # list of previous experiences, enabling re-training later
+        #self.memory.append((state, action, reward, next_state, done)) # list of previous experiences, enabling re-training later
+        pass
 
-    def act(self, state):
-        if np.random.rand() <= self.epsilon: # if acting randomly, take random action
-            return random.randrange(self.action_size)
-        act_values = self.model.predict(state) # if not acting randomly, predict reward value based on current state
-        return np.argmax(act_values[0]) # pick the action that will give the highest reward (i.e., go left or right?)
+    def NormalizeImage(self, observation):
+        observation = cv2.cvtColor(cv2.resize(observation, (84, 110)), cv2.COLOR_BGR2GRAY)
+        observation = observation[26:110,:]
+        ret, observation = cv2.threshold(observation,1,255,cv2.THRESH_BINARY)
+        return np.reshape(observation,(84,84,1))/255
 
-    def replay(self, batch_size): # method that trains NN with experiences sampled from memory
-        minibatch = random.sample(self.memory, batch_size) # sample a minibatch from memory
-        for state, action, reward, next_state, done in minibatch: # extract data for each minibatch sample
-            target = reward # if done (boolean whether game ended or not, i.e., whether final state or not), then target = reward
-            if not done: # if not done, then predict future discounted reward
-                target = (reward + self.gamma * # (target) = reward + (discount rate gamma) * 
-                          np.amax(self.model.predict(next_state)[0])) # (maximum target Q based on future action a')
-            target_f = self.model.predict(state) # approximately map current state to future discounted reward
-            target_f[0][action] = target
-            self.model.fit(state, target_f, epochs=1, verbose=0) # single epoch of training with x=state, y=target_f; fit decreases loss btwn target_f and y_hat
+    def updateActionQValues(self, Q, reward_total):
+    
+        Qret = Q
+        
+        Q[0][1] = [0] * (self.action_size)
+        Q[1][1] = [0] * (self.action_size)
+    
+        for i in range(2,len(Q)-1):
+            
+            state = np.dstack([Q[i-2][0], Q[i-1][0], Q[i][0]])
+        
+            state_pred = np.expand_dims(state, axis=0)
+            actions_pred = self.model.predict(state_pred)[0]
+            
+            action_values = [0] * (self.action_size)
+            action_values[Q[i][1]] = reward_total*(0.98)**(len(Q)-i)  + self.gamma*Q[i+1][1]
+            
+            actions_values = []
+
+            for num1,num2 in zip(actions_pred, action_values):
+                actions_values.append(num1+num2)
+            Qret[i][1] = actions_values
+        
+        return Qret[2:len(Q)-2]
+
+    def PlayGame(self, env):
+        Q = []
+
+        env.reset()
+
+        action = np.random.randint(low=0, high=self.action_size)
+        img, reward, end_episode, info = env.step(action=action)
+        state_frame = np.array(self.NormalizeImage(img))
+
+        Q.append([state_frame, action])
+
+        action = np.random.randint(low=0, high=self.action_size)
+        img, reward, end_episode, info = env.step(action=action)
+        state_frame = np.array(self.NormalizeImage(img))
+
+        Q.append([state_frame, action])
+
+        action = np.random.randint(low=0, high=self.action_size)
+        img, reward, end_episode, info = env.step(action=action)
+        state_frame = np.array(self.NormalizeImage(img))
+
+        Q.append([state_frame, action])
+
+        reward_total = reward
+        while not (end_episode):
+
+            num_states = len(Q)-1
+            state = np.dstack([Q[num_states-2][0], Q[num_states-1][0], Q[num_states][0]])
+
+            state_pred = np.expand_dims(state, axis=0)
+
+            if np.random.rand() <= self.epsilon:
+                action = np.argmax(self.model.predict(state_pred)[0])
+            else:
+                action = np.random.randint(low=0, high=self.action_size)
+
+            img, reward, end_episode, info = env.step(action=action)
+            state_frame = np.array(self.NormalizeImage(img)) 
+
+            Q.append([state_frame, action])   
+
+            reward_total += reward
+
+        print("Points : {}, Epsilon : {}".format(reward_total, round(self.epsilon,2)) )
+
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
-    def load(self, name):
-        self.model.load_weights(name)
+        Q = self.updateActionQValues(Q, reward_total)
+    
+        return Q
 
-    def save(self, name):
-        self.model.save_weights(name)
+    def LearnToPlay(self, env):
+        tbCallBack = keras.callbacks.TensorBoard(log_dir='./log', histogram_freq=0, write_graph=True, write_images=True)
+        while(True):
+            Q = []
+            for _ in range(15):
+                Q1 = self.PlayGame(env)
+                Q+=Q1
+            x,y = self.PrepareTrainData(Q)
+
+            print()
+            print("Optimizing Model")
+            print()
+            self.model.fit(x=x,y=y,epochs = 4,callbacks=[tbCallBack])
+            print()
+            del Q
+
+    def JustPlay(self, env, NumGames):
+        for _ in range(NumGames):
+
+            Q = []
+
+            env.reset()
+
+            action = np.random.randint(low=0, high=self.action_size)
+            img, reward, end_episode, info = env.step(action=action)
+            state_frame = np.array(self.NormalizeImage(img))
+
+            Q.append([state_frame, action])
+
+            action = np.random.randint(low=0, high=self.action_size)
+            img, reward, end_episode, info = env.step(action=action)
+            state_frame = np.array(self.NormalizeImage(img))
+
+            Q.append([state_frame, action])
+
+            action = np.random.randint(low=0, high=self.action_size)
+            img, reward, end_episode, info = env.step(action=action)
+            state_frame = np.array(self.NormalizeImage(img))
+
+            Q.append([state_frame, action])
+
+            reward_total = reward
+
+            while not (end_episode):
+                env.render()
+
+                num_states = len(Q)-1
+                state = np.dstack([Q[num_states-2][0], Q[num_states-1][0], Q[num_states][0]])
+
+                state_pred = np.expand_dims(state, axis=0)
+                action = np.argmax(self.model.predict(state_pred)[0])
+                img, reward, end_episode, info = env.step(action=action)  
+
+                reward_total += reward
+
+        print("Points : {}".format(reward_total))
+
+    def PrepareTrainData(self, Q):
+        statelist = []
+        actionslistaaa = []
+
+        state0 = Q[0][0]
+        state = np.dstack([state0, state0, state0])
+        action0 = Q[2][1]
+        actionslistaaa.append(np.array(action0))
+        action0 = Q[2][1]
+        actionslistaaa.append(np.array(action0))
+
+        statelist.append(state)
+        state0 = Q[1][0]
+        state = np.dstack([state0, state0, state0])
+        statelist.append(state)
+
+        for i in range (2,len(Q)):
+            state = np.dstack([Q[i-2][0], Q[i-1][0], Q[i][0]])
+            statelist.append(state)
+            action0 = Q[i][1]
+            actionslistaaa.append(np.array(action0))
+        x = np.array(statelist)
+        y = np.array(actionslistaaa)
+        return x,y
+
+
+    # def act(self, state):
+    #     if np.random.rand() <= self.epsilon: # if acting randomly, take random action
+    #         return random.randrange(self.action_size)
+    #     act_values = self.model.predict(state) # if not acting randomly, predict reward value based on current state
+    #     return np.argmax(act_values[0]) # pick the action that will give the highest reward (i.e., go left or right?)
+
+    # def replay(self, batch_size): # method that trains NN with experiences sampled from memory
+    #     minibatch = random.sample(self.memory, batch_size) # sample a minibatch from memory
+    #     for state, action, reward, next_state, done in minibatch: # extract data for each minibatch sample
+    #         target = reward # if done (boolean whether game ended or not, i.e., whether final state or not), then target = reward
+    #         if not done: # if not done, then predict future discounted reward
+    #             target = (reward + self.gamma * # (target) = reward + (discount rate gamma) * 
+    #                       np.amax(self.model.predict(next_state)[0])) # (maximum target Q based on future action a')
+    #         target_f = self.model.predict(state) # approximately map current state to future discounted reward
+    #         target_f[0][action] = target
+    #         self.model.fit(state, target_f, epochs=1, verbose=0) # single epoch of training with x=state, y=target_f; fit decreases loss btwn target_f and y_hat
+    #     if self.epsilon > self.epsilon_min:
+    #         self.epsilon *= self.epsilon_decay
+
+    def load(self):
+        self.model = load_model('model_Agent_DQN.h5')
+
+    def save(self):
+        self.model.save('model_Agent_DQN.h5')
