@@ -8,17 +8,20 @@ import numpy as np
 from keras.models import load_model
 import cv2
 import time
+import sys
+import gym
 
 class Agent:
     def __init__(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
-        self.gamma = 0.5 # decay or discount rate: enables agent to take into account future actions in addition to the immediate ones, but discounted at this rate
+        self.gamma = 0.9 # decay or discount rate: enables agent to take into account future actions in addition to the immediate ones, but discounted at this rate
         self.epsilon = 1 # exploration rate: how much to act randomly; more initially than later due to epsilon decay
-        self.epsilon_decay = 0.999 # decrease number of random explorations as the agent's performance (hopefully) improves over time
+        self.epsilon_decay = 0.98 # decrease number of random explorations as the agent's performance (hopefully) improves over time
         self.epsilon_min = 0.01 # minimum amount of random exploration permitted
         self.learning_rate = 0.05 # rate at which NN adjusts models parameters via Adam to reduce cost 
-        self.model = self._build_model() # private method 
+        self.model = self._build_model() # private method
+        self.learning_rate_QLearning = 0.9 
     
     def _build_model(self):
         cardinality = 1
@@ -119,197 +122,175 @@ class Agent:
                     metrics=['mae'])
         return model
     
-    def remember(self, state, action, reward, next_state, done):
-        #self.memory.append((state, action, reward, next_state, done)) # list of previous experiences, enabling re-training later
-        pass
 
     def NormalizeImage(self, observation):
         observation = cv2.cvtColor(cv2.resize(observation, (84, 110)), cv2.COLOR_BGR2GRAY)
         observation = observation[26:110,:]
-        ret, observation = cv2.threshold(observation,1,255,cv2.THRESH_BINARY)
-        return np.reshape(observation,(84,84,1))/255
+        ret, observation = cv2.threshold(observation, 1, 255, cv2.THRESH_BINARY)
+        return np.reshape(observation,(84, 84, 1))/255
 
-    def updateActionQValues(self, Q, reward_total):
+    def updateActionQValues(self, PlayMemory):
     
-        Qret = Q
-        
-        Q[0][1] = [0] * (self.action_size)
-        Q[1][1] = [0] * (self.action_size)
-    
-        for i in range(2,len(Q)-1):
-            
-            state = np.dstack([Q[i-2][0], Q[i-1][0], Q[i][0]])
-        
-            state_pred = np.expand_dims(state, axis=0)
-            actions_pred = self.model.predict(state_pred)[0]
-            
-            action_values = [0] * (self.action_size)
-            action_values[Q[i][1]] = reward_total*(0.98)**(len(Q)-i)  + self.gamma*Q[i+1][1]
-            
-            actions_values = []
-
-            for num1,num2 in zip(actions_pred, action_values):
-                actions_values.append(num1+num2)
-            Qret[i][1] = actions_values
-        
-        return Qret[2:len(Q)-2]
-
-    def PlayGame(self, env):
         Q = []
+    
+        for i in range(2, len(PlayMemory)-1):
+            
+            estimative = np.add( -(PlayMemory[i][3] + self.gamma*np.max(PlayMemory[i+1][2])), PlayMemory[i][2])
+            
+            Qvalue = np.add(PlayMemory[i][2], -self.learning_rate_QLearning*estimative)
+
+            Q.append([PlayMemory[i][0], Qvalue]) 
+        
+        return Q
+
+    def PlayGame(self, env, renderEnv):
+        PlayMemory = []
 
         env.reset()
 
-        action = np.random.randint(low=0, high=self.action_size)
-        img, reward, end_episode, info = env.step(action=action)
+        initActions = [0, 0, 0, 0]
+
+        N_action = np.random.randint(low=0, high=self.action_size)
+        img, reward, end_episode, _ = env.step(action=N_action)
         state_frame = np.array(self.NormalizeImage(img))
 
-        Q.append([state_frame, action])
+        PlayMemory.append([state_frame, N_action, initActions, reward])
 
-        action = np.random.randint(low=0, high=self.action_size)
-        img, reward, end_episode, info = env.step(action=action)
+        N_action = np.random.randint(low=0, high=self.action_size)
+        img, reward, end_episode, _ = env.step(action=N_action)
         state_frame = np.array(self.NormalizeImage(img))
 
-        Q.append([state_frame, action])
+        PlayMemory.append([state_frame, N_action, initActions, reward])
 
-        action = np.random.randint(low=0, high=self.action_size)
-        img, reward, end_episode, info = env.step(action=action)
-        state_frame = np.array(self.NormalizeImage(img))
-
-        Q.append([state_frame, action])
 
         reward_total = reward
         while not (end_episode):
 
-            num_states = len(Q)-1
-            state = np.dstack([Q[num_states-2][0], Q[num_states-1][0], Q[num_states][0]])
+            if renderEnv:
+                env.render()
+                time.sleep(0.01)
+
+            num_states = len(PlayMemory)-1
+            state = np.dstack([PlayMemory[num_states-2][0],
+            PlayMemory[num_states-1][0], 
+            PlayMemory[num_states][0]])
 
             state_pred = np.expand_dims(state, axis=0)
 
+            Qvalues = self.model.predict(state_pred)[0]
+
             if np.random.rand() <= self.epsilon:
-                action = np.argmax(self.model.predict(state_pred)[0])
+                N_action = np.argmax(Qvalues)
             else:
-                action = np.random.randint(low=0, high=self.action_size)
+                N_action = np.random.randint(low=0, high=self.action_size)
 
-            img, reward, end_episode, info = env.step(action=action)
+            img, reward, end_episode, _ = env.step(action=N_action)
             state_frame = np.array(self.NormalizeImage(img)) 
-
-            Q.append([state_frame, action])   
 
             reward_total += reward
 
-        print("Points : {}, Epsilon : {}".format(reward_total, round(self.epsilon,2)) )
+            PlayMemory.append([state_frame, N_action, Qvalues, reward])
+
+        print("Epsilon : {} Points : {}".format(round(self.epsilon,2), reward_total))
 
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
-
-        Q = self.updateActionQValues(Q, reward_total)
     
-        return Q
+        return PlayMemory
 
-    def LearnToPlay(self, env):
+    def LearnToPlay(self, env, renderEnv):
+
         tbCallBack = keras.callbacks.TensorBoard(log_dir='./log', histogram_freq=0, write_graph=True, write_images=True)
         while(True):
+
             Q = []
-            for _ in range(15):
-                Q1 = self.PlayGame(env)
+
+            for _ in range(10):
+
+                PlayMemory = self.PlayGame(env, renderEnv)
+                Q1 = self.updateActionQValues(PlayMemory)
+
                 Q+=Q1
-            x,y = self.PrepareTrainData(Q)
+
+            x, y = self.PrepareTrainData(Q)
 
             print()
             print("Optimizing Model")
             print()
-            self.model.fit(x=x,y=y,epochs = 4,callbacks=[tbCallBack])
+            self.model.fit(x=x, y=y, epochs = 4, callbacks=[tbCallBack])
             print()
             del Q
 
-    def JustPlay(self, env, NumGames):
+    def JustPlay(self, env, renderEnv, NumGames):
         for _ in range(NumGames):
 
-            Q = []
-
-            env.reset()
-
-            action = np.random.randint(low=0, high=self.action_size)
-            img, reward, end_episode, info = env.step(action=action)
-            state_frame = np.array(self.NormalizeImage(img))
-
-            Q.append([state_frame, action])
-
-            action = np.random.randint(low=0, high=self.action_size)
-            img, reward, end_episode, info = env.step(action=action)
-            state_frame = np.array(self.NormalizeImage(img))
-
-            Q.append([state_frame, action])
-
-            action = np.random.randint(low=0, high=self.action_size)
-            img, reward, end_episode, info = env.step(action=action)
-            state_frame = np.array(self.NormalizeImage(img))
-
-            Q.append([state_frame, action])
-
-            reward_total = reward
-
-            while not (end_episode):
-                env.render()
-
-                num_states = len(Q)-1
-                state = np.dstack([Q[num_states-2][0], Q[num_states-1][0], Q[num_states][0]])
-
-                state_pred = np.expand_dims(state, axis=0)
-                action = np.argmax(self.model.predict(state_pred)[0])
-                img, reward, end_episode, info = env.step(action=action)  
-
-                reward_total += reward
-
-        print("Points : {}".format(reward_total))
+            _  = self.PlayGame(env, renderEnv)
 
     def PrepareTrainData(self, Q):
         statelist = []
-        actionslistaaa = []
+        actionslist = []
 
         state0 = Q[0][0]
         state = np.dstack([state0, state0, state0])
-        action0 = Q[2][1]
-        actionslistaaa.append(np.array(action0))
-        action0 = Q[2][1]
-        actionslistaaa.append(np.array(action0))
-
         statelist.append(state)
+
         state0 = Q[1][0]
         state = np.dstack([state0, state0, state0])
         statelist.append(state)
 
+        action0 = Q[0][1]
+        actionslist.append(np.array(action0))
+        action0 = Q[1][1]
+        actionslist.append(np.array(action0))
+
         for i in range (2,len(Q)):
             state = np.dstack([Q[i-2][0], Q[i-1][0], Q[i][0]])
             statelist.append(state)
+
             action0 = Q[i][1]
-            actionslistaaa.append(np.array(action0))
-        x = np.array(statelist)
-        y = np.array(actionslistaaa)
+            actionslist.append(np.array(action0))
+            
+        x = np.array(statelist[3:len(Q)])
+        y = np.array(actionslist[3:len(Q)])
+
         return x,y
-
-
-    # def act(self, state):
-    #     if np.random.rand() <= self.epsilon: # if acting randomly, take random action
-    #         return random.randrange(self.action_size)
-    #     act_values = self.model.predict(state) # if not acting randomly, predict reward value based on current state
-    #     return np.argmax(act_values[0]) # pick the action that will give the highest reward (i.e., go left or right?)
-
-    # def replay(self, batch_size): # method that trains NN with experiences sampled from memory
-    #     minibatch = random.sample(self.memory, batch_size) # sample a minibatch from memory
-    #     for state, action, reward, next_state, done in minibatch: # extract data for each minibatch sample
-    #         target = reward # if done (boolean whether game ended or not, i.e., whether final state or not), then target = reward
-    #         if not done: # if not done, then predict future discounted reward
-    #             target = (reward + self.gamma * # (target) = reward + (discount rate gamma) * 
-    #                       np.amax(self.model.predict(next_state)[0])) # (maximum target Q based on future action a')
-    #         target_f = self.model.predict(state) # approximately map current state to future discounted reward
-    #         target_f[0][action] = target
-    #         self.model.fit(state, target_f, epochs=1, verbose=0) # single epoch of training with x=state, y=target_f; fit decreases loss btwn target_f and y_hat
-    #     if self.epsilon > self.epsilon_min:
-    #         self.epsilon *= self.epsilon_decay
 
     def load(self):
         self.model = load_model('model_Agent_DQN.h5')
 
     def save(self):
         self.model.save('model_Agent_DQN.h5')
+
+def main(Agent, env):
+
+    if sys.argv[1] == 'train':
+
+        Agent.LearnToPlay(env, False)
+
+    elif sys.argv[1] == 'play':
+
+        Agent.JustPlay(env, 5, True)
+
+    elif sys.argv[1] == 'loadandplay':
+
+        Agent.load()
+        Agent.JustPlay(env, 5, True)
+
+    else:
+        raise Exception('Invalid argument, choose train play or loadandplay (need wights in file model_Agent_DQN.h5)')
+
+if __name__ == "__main__":
+
+    env_name = 'Breakout-v0'
+    env = gym.make(env_name)
+    np.random.seed(123)
+    env.seed(123)
+    nb_actions = env.action_space.n
+
+    img_height = 84
+    img_width = 84
+    img_channels = 3
+
+    state_dim = [img_height,img_width,img_channels]
+    Agent = Agent(state_dim, nb_actions)
+    main(Agent, env)
