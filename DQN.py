@@ -10,18 +10,38 @@ import cv2
 import time
 import sys
 import gym
+from keras.callbacks import Callback
+
+class ComputeMetrics(Callback):
+
+    def on_epoch_end(self, epoch, logs):
+
+        global mean_pointsep, mean_qvaluesep
+
+        logs['mean_pointsep'] = mean_pointsep
+        logs['mean_qvaluesep'] = mean_qvaluesep
+        logs['epsilon'] = getattr(Agent, 'epsilon')
+
 
 class Agent:
+
     def __init__(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
-        self.gamma = 0.9 # decay or discount rate: enables agent to take into account future actions in addition to the immediate ones, but discounted at this rate
-        self.epsilon = 1 # exploration rate: how much to act randomly; more initially than later due to epsilon decay
-        self.epsilon_decay = 0.98 # decrease number of random explorations as the agent's performance (hopefully) improves over time
-        self.epsilon_min = 0.01 # minimum amount of random exploration permitted
-        self.learning_rate = 0.05 # rate at which NN adjusts models parameters via Adam to reduce cost 
-        self.model = self._build_model() # private method
-        self.learning_rate_QLearning = 0.9 
+        self.gamma = 0.7 
+        self.epsilon = 1 
+        self.epsilon_decay = 0.98
+        self.epsilon_min = 0.1 
+        self.learning_rate_optimizer = 0.00001
+        self.model = self._build_model() 
+        self.learning_rate_QLearning = 0.3 
+        self.NumGamesEp = 10
+
+    def getEpsilon(self):
+        return self.epsilon
+
+    def setEpsilon(self, epsilon):
+        self.epsilon = epsilon
     
     def _build_model(self):
         cardinality = 1
@@ -115,7 +135,7 @@ class Agent:
         
         model = models.Model(inputs=[image_tensor], outputs=[network_output])
 
-        optimizer = adam(lr = self.learning_rate, clipvalue=1)
+        optimizer = adam(lr = self.learning_rate_optimizer)
         
         model.compile(optimizer=optimizer, 
                     loss='mean_squared_error',
@@ -135,7 +155,7 @@ class Agent:
     
         for i in range(2, len(PlayMemory)-1):
             
-            estimative = np.add( -(PlayMemory[i][3] + self.gamma*np.max(PlayMemory[i+1][2])), PlayMemory[i][2])
+            estimative = np.add(-(PlayMemory[i][3] + self.gamma*np.max(PlayMemory[i+1][2])), PlayMemory[i][2])
             
             Qvalue = np.add(PlayMemory[i][2], -self.learning_rate_QLearning*estimative)
 
@@ -191,34 +211,59 @@ class Agent:
 
             PlayMemory.append([state_frame, N_action, Qvalues, reward])
 
-        print("Epsilon : {} Points : {}".format(round(self.epsilon,2), reward_total))
-
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-    
-        return PlayMemory
+        return PlayMemory, reward_total, Qvalues
 
     def LearnToPlay(self, env, renderEnv):
 
-        tbCallBack = keras.callbacks.TensorBoard(log_dir='./log', histogram_freq=0, write_graph=True, write_images=True)
+        TensorboadCallback = keras.callbacks.TensorBoard(log_dir='./log', histogram_freq=0, write_graph=True, write_images=True)
+
+        global mean_pointsep, mean_qvaluesep
+
+        print()
+        print("Starting training, weights are saved in model_Agent_DQN.h5")
+        print()
+
         while(True):
+
+            reward_ep_total = 0
+            Qvalues_ep_total = np.array([0, 0, 0, 0])
 
             Q = []
 
-            for _ in range(10):
+            for _ in range(self.NumGamesEp):
 
-                PlayMemory = self.PlayGame(env, renderEnv)
+                PlayMemory, reward_ep, Qvalues_ep = self.PlayGame(env, renderEnv)
+
+                reward_ep_total += reward_ep
+                Qvalues_ep_total = np.add(Qvalues_ep_total, Qvalues_ep)
+
                 Q1 = self.updateActionQValues(PlayMemory)
 
                 Q+=Q1
 
+            mean_pointsep = reward_ep_total/self.NumGamesEp
+            mean_qvaluesep = np.mean(Qvalues_ep_total)/self.NumGamesEp
+
             x, y = self.PrepareTrainData(Q)
 
+
+            print()
+            print("Epsilon : {} Median Points : {} Median QValues : {}".format(round(self.epsilon,2),
+            round(mean_pointsep,2),
+            round(mean_qvaluesep,2)))
             print()
             print("Optimizing Model")
             print()
-            self.model.fit(x=x, y=y, epochs = 4, callbacks=[tbCallBack])
+            self.model.fit(x=x, y=y, epochs = 4, callbacks=[ComputeMetrics(), TensorboadCallback])
             print()
+            print("Done playing {} games! weights saved. Will start another round. Press CTRL + C to stop training".format(self.NumGamesEp))
+            print()
+
+            if self.epsilon > self.epsilon_min:
+                self.epsilon *= self.epsilon_decay
+
+            self.model.save('model_Agent_DQN.h5')
+
             del Q
 
     def JustPlay(self, env, renderEnv, NumGames):
@@ -273,7 +318,11 @@ def main(Agent, env):
 
     elif sys.argv[1] == 'loadandplay':
 
-        Agent.load()
+        try:
+            Agent.load()
+        except:
+            print('Could not load weights in model_Agent_DQN.h5')
+
         Agent.JustPlay(env, 5, True)
 
     else:
