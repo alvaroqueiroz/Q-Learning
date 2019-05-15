@@ -4,3 +4,5 @@ __pycache__/DQN.cpython-36.pyc
 log/
 .ipynb_checkpoints/
 __pycache__/
+.vscode/
+__pycache__/DQN.cpython-36.pyc
