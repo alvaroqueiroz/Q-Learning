@@ -1,3 +1,18 @@
+# Author: Álvaro Queiroz
+#
+#
+# To train agent use
+# $ python DQN.py train
+#
+# To play a round of five games use
+# $ python DQN.py play
+#
+# To play a round of five games using weights in model_Agent_DQN.h5 file
+# $ python DQN.py loadandplay
+#
+# If you get crashes or the code is using too much RAM, try rducing NumGamesEp
+
+
 import keras
 from keras import layers
 from keras import models
@@ -14,7 +29,8 @@ from keras.callbacks import Callback
 
 class ComputeMetrics(Callback):
     """
-    Class that inherits from Callback to add log fields mean_pointsep, mean_qvaluesep and epsilon
+    Class that inherits from keras Callback to add log fields mean_pointsep, mean_qvaluesep and epsilon to log
+    used in Tensorboard
     """
 
     def on_epoch_end(self, epoch, logs):
@@ -42,8 +58,6 @@ class Agent:
         param envName: name of gym enviroment
         """
 
-        # Agent NN is set by defoult, but can also be set using setModel method
-        self.model = self._build_model() 
         # Compile enviroment
         self.env = self.MakeEnvironment(envName)
         # This will get the number of possible actions for the current enviroment
@@ -59,9 +73,11 @@ class Agent:
         # Rate of decay of epsilon for each game episode
         self.epsilon_decay = 0.995
         # Learning rate for the optimizer ( Normally Adam)
-        self.learning_rate_optimizer = 0.00001
+        self.learning_rate_optimizer = 0.001
         # Learning rate for the Agent see Q-Learning equation https://en.wikipedia.org/wiki/Q-learning
-        self.learning_rate = 0.8
+        self.learning_rate = 0.1
+        # Agent NN is set by defoult, but can also be set using setModel method
+        self.model = self._build_model() 
         # Number of games for each episode before training
         self.NumGamesEp = 15
         # number of epochs in training phase
@@ -241,18 +257,22 @@ class Agent:
 
     def updateActionQValues(self, PlayMemory):
         """
-        Takes Playmemory and returns Q matriz with Q values updated
-        param List PlayMemory: list with state_frame, N_action, Qvalues, reward
-        Returns List Q with state, Qvalues
+        Takes  list Playmemory and returns data for training
+        param List PlayMemory: list with state_frame, N_action, Qvalues, reward, state
+        Returns 2 numpy arrays states and qvalues
         """
-        # New list to append states and Qvalues
-        Q = []
+        # New list to append states
+        StatesList = []
+        # List to append qvalues as numpy arrays
+        # This way we add one dimension to the training data  (batch dim)
+        QValuesList = []
     
         # Loop over Playmemory to calculate new Q-values
-        # Will not loop over the two first playmemory rows as they have dummy frames
-        for i in range(2, len(PlayMemory)-1):
+        # Will not loop over the two first playmemory rows as they have dummy data
+        # The last state of the game is discarded, it cannot be updated using the Q-learning equation
+        for i in range(len(PlayMemory)-1):
             
-            # [state_frame, N_action, Qvalues, reward]
+            # [state_frame, N_action, Qvalues, reward, state]
             Qvalues = PlayMemory[i][2]
             ActionTaken = PlayMemory[i][1]
             Reward = PlayMemory[i][3]
@@ -260,70 +280,21 @@ class Agent:
             MaxNextState = np.max(PlayMemory[i+1][2])
             
             # Q-Learning iterative equation https://en.wikipedia.org/wiki/Q-learning
-            QvalueNew =  Qvalues[ActionTaken] + self.learning_rate*(Reward + self.gamma*MaxNextState - Qvalues[ActionTaken])
+            Qvalues[ActionTaken] =  Qvalues[ActionTaken] + self.learning_rate*(Reward + self.gamma*MaxNextState - Qvalues[ActionTaken])
 
-            # Update value in Qvalues list
-            Qvalues[ActionTaken] = QvalueNew
-
-            # Append to list Q matrix
-            Q.append([PlayMemory[i][0], Qvalues]) 
+            StatesList.append(PlayMemory[i][4])
+            QValuesList.append(np.array(Qvalues))
         
-        return Q
-
-    def PrepareTrainData(self, Q):
-        """
-        This function takes in the Q list and returns data for training model
-        param List Q: list with state, Qvalues
-        Return numpy arrays x,y
-        This function may not be necessary, but is the solution i have found to prepare data for training
-        """
-
-        # I really dont like this function, it may be changed in future (or not)
-        # Will create two lists, to prepare data for training
-        statelist = []
-        actionslist = []
-
-        # Dummy frames are needed at the start of the list to make the states
-        # because each state is made of 3 frames, so, the first state needs
-        # three frames, the first states will not be considered for training
-        state0 = Q[0][0]
-        state = np.dstack([state0, state0, state0])
-        statelist.append(state)
-
-        state0 = Q[1][0]
-        state = np.dstack([state0, state0, state0])
-        statelist.append(state)
-
-        action0 = Q[0][1]
-        actionslist.append(np.array(action0))
-        action0 = Q[1][1]
-        actionslist.append(np.array(action0))
-
-        # Loop over Q list (matrix) to prepare the states and get the actions
-        for i in range (2,len(Q)):
-
-            # Stack 3 frames to get one state
-            state = np.dstack([Q[i-2][0], Q[i-1][0], Q[i][0]])
-            statelist.append(state)
-
-            # Get action for the given state
-            action = Q[i][1]
-            actionslist.append(np.array(action))
-            
-        # Discard the first 3 states because the dummy frames at the beginning of the list
-        # Training requires data in numpy arrays
-        x = np.array(statelist[3:len(Q)])
-        y = np.array(actionslist[3:len(Q)])
-
-        return x,y
+        # For training, data must be in numpy arrays
+        return np.array(StatesList), np.array(QValuesList)
 
     def PlayGame(self, renderEnv):
         """
         Funtion to play gym game and fill Playmemory list
         param bool renderEnv: render enviroment or not
-        returns List Playmemory with state_frame, N_action, Qvalues, reward
+        returns List Playmemory with state_frame, N_action, Qvalues, reward, state
         """
-        # Create list to append game data [state_frame, N_action, Qvalues, reward]
+        # Create list to append game data [state_frame, N_action, Qvalues, reward, state]
         PlayMemory = []
 
         # Reset enviroment to start new game
@@ -333,22 +304,25 @@ class Agent:
         initQvalues = [0, 0, 0, 0]
 
         # First dummy value with random action
-        #choose actions randomly
+        # choose actions randomly
+        # We need to dummy frames to get the first state in the loop
         N_action = np.random.randint(low=0, high=self.action_size)
-        #Get image frame, reward
+        # Get image frame, reward
         img, reward, end_episode, _ = self.env.step(action=N_action)
-        #preprocess and normalize image
+        # preprocess and normalize image
         state_frame = np.array(self.NormalizeImage(img))
+        dummystate = np.dstack([state_frame, state_frame, state_frame])
 
         # Append the dummy row
-        PlayMemory.append([state_frame, N_action, initQvalues, reward])
+        PlayMemory.append([state_frame, N_action, initQvalues, reward, dummystate])
 
         # Another one
         N_action = np.random.randint(low=0, high=self.action_size)
         img, reward, end_episode, _ = self.env.step(action=N_action)
         state_frame = np.array(self.NormalizeImage(img))
+        dummystate = np.dstack([state_frame, state_frame, state_frame])
 
-        PlayMemory.append([state_frame, N_action, initQvalues, reward])
+        PlayMemory.append([state_frame, N_action, initQvalues, reward, dummystate])
 
         # Sum reward to log in callback
         reward_total = reward
@@ -396,14 +370,15 @@ class Agent:
 
             reward_total += reward
 
-            PlayMemory.append([state_frame, N_action, Qvalues, reward])
+            PlayMemory.append([state_frame, N_action, Qvalues, reward, state])
 
         # Return PlayMemory and some data to be displayed while training
-        return PlayMemory, reward_total, Qvalues
+        # First two rows are discarded as they are dummy data
+        return PlayMemory[2:len(PlayMemory)], reward_total, Qvalues
 
     def LearnToPlay(self, renderEnv):
         """
-        Function to learn to play, it uses an infinity loop
+        Learn to play, it uses an infinity loop
         param bool renderEnv: render enviroment or not
 
         """
@@ -425,7 +400,7 @@ class Agent:
             Qvalues_ep_total = np.array([0, 0, 0, 0])
 
             # List to append Q matrix of each game
-            Q = []
+            TotalPlayMemory = []
 
             # Each game episode generates the training data for one training section
             for _ in range(self.NumGamesEp):
@@ -437,18 +412,17 @@ class Agent:
                 reward_ep_total += reward_ep
                 Qvalues_ep_total = np.add(Qvalues_ep_total, Qvalues_ep)
 
-                # Get the Q matrix from the PlayMemory
-                Q1 = self.updateActionQValues(PlayMemory)
-
-                # Add to the list
-                Q+=Q1
+                # We will append the play memory to the total
+                # The TotalPlayMemory will be used to train the NN after we update its Qvalues
+                TotalPlayMemory += PlayMemory
 
             # Calculate de the mean points and qvalues for the episode
             mean_pointsep = reward_ep_total/self.NumGamesEp
             mean_qvaluesep = np.mean(Qvalues_ep_total)/self.NumGamesEp
 
-            # Prepare data for training
-            x, y = self.PrepareTrainData(Q)
+            # Here we update the Qvalues using the Q-Learning iterative equation
+            #  and prepare data for training
+            States, ActionsValues = self.updateActionQValues(TotalPlayMemory)
 
 
             print()
@@ -459,9 +433,10 @@ class Agent:
             print("Optimizing Model")
             print()
             if self.RecordMetrics:
-                self.model.fit(x=x, y=y, epochs = self.NumEpochs, callbacks=[ComputeMetrics(), TensorboadCallback])
+                self.model.fit(x = States, y = ActionsValues, epochs = self.NumEpochs,
+                callbacks=[ComputeMetrics(), TensorboadCallback])
             else:
-                self.model.fit(x=x, y=y, epochs = self.NumEpochs)
+                self.model.fit(x = States, y = ActionsValues, epochs = self.NumEpochs)
             print()
             print("Done playing {} game(s)! Will start another round. Press CTRL + C to stop training".format(self.NumGamesEp))
             print()
@@ -471,8 +446,6 @@ class Agent:
 
             if self.SaveWeights_inTraining:
                 self.model.save('model_Agent_DQN.h5')
-
-            del Q
 
     def JustPlay(self, renderEnv, NumGames):
         for _ in range(NumGames):
