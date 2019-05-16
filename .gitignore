@@ -6,3 +6,4 @@ log/
 __pycache__/
 .vscode/
 __pycache__/DQN.cpython-36.pyc
+model_Agent_DQN.h5
