@@ -9,7 +9,7 @@ For any finite Markov decision process (FMDP), Q-learning finds a policy that is
 Used to update the Neural Network, the optimality principle of Bellman is a definition of recursion for an optimal Q function. Q(S(t), A(t)) equals the sum of the immediate reward after performing an action at some time and an expected future reward after a transition to a next state.
 
 
-Q(S(t),A(t) )←Q(S(t),A(t) )+ α[R(t+1)+γQ(S(t+1),A(t+1) )-Q(S(t),A(t) )]
+Q(S(t),A(t) )←Q(S(t),A(t) )+ α[R(t+1)+γmax(Q(S(t+1),A(t+1)))-Q(S(t),A(t) )]
 
 Algorithm flow
 
