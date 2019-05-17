@@ -53,7 +53,7 @@ class Agent:
     Model wights are saved in model_Agent_DEQN.h5 file
     """
 
-    def __init__(self, envName):
+    def __init__(self, envName, renderEnv):
         """
         param envName: name of gym enviroment
         """
@@ -83,14 +83,17 @@ class Agent:
         # number of epochs in training phase
         self.NumEpochs = 3
         # Save weight during training
-        self.SaveWeights_inTraining = True
+        # Allowing to sabe wights every iteration will slow down training, but is safer...
+        self.SaveWeights_inTraining = False
         # Record matrics in logs folder for use in Tensorboard
         self.RecordMetrics = True
+        # if the env will be rendered or not
+        self.renderEnv = renderEnv
 
     def setModel(self, model):
         """
         param: model
-        Set compiled model as the new neural networf of the Agent
+        Set compiled model as the new neural networf for the Agent
         """
         self.model = model
         # I've had some problem in recording metrics with custom models, to avoid that...
@@ -136,14 +139,27 @@ class Agent:
         self.model.save('model_Agent_DQN.h5')
     
     def _build_model(self):
+        """
+        Create Convolutional Neural Network model for Agent
+        Returns compiled model
+        """
 
-        def create_network(x):
+        def add_layers(x):
 
+            # The neural network must be able to identify all possible states in the system
+            # And return Q values for each state
+            # As the game can be seen a frame at each instant, those frames will be used to
+            # compose the states
+            # Convolutional Neural networks are known to be good in image classification
+            # thats the reason for using CNNs
             # Firt convlution layer
             x = layers.Conv2D(32, kernel_size=(7, 7), strides=(2, 2), padding='same')(x)
+            # Max pooling to down sample the image representation
             x = layers.MaxPool2D(pool_size=(3, 3), strides=(2, 2), padding='same')(x)
+            # Second ...
             x = layers.Conv2D(64, kernel_size=(7, 7), strides=(2, 2), padding='same')(x)
             x = layers.MaxPool2D(pool_size=(3, 3), strides=(2, 2), padding='same')(x)
+            # Three should be enought for the task
             x = layers.Conv2D(64, kernel_size=(7, 7), strides=(2, 2), padding='same')(x)
             x = layers.MaxPool2D(pool_size=(3, 3), strides=(2, 2), padding='same')(x)
 
@@ -161,7 +177,7 @@ class Agent:
 
         # the input of the NN has the sice of the state 84,84,3
         image_tensor = layers.Input(shape=(self.state_size))
-        network_output = create_network(image_tensor)
+        network_output = add_layers(image_tensor)
         
         model = models.Model(inputs=[image_tensor], outputs=[network_output])
 
@@ -222,10 +238,9 @@ class Agent:
         # For training, data must be in numpy arrays
         return np.array(StatesList), np.array(QValuesList)
 
-    def PlayGame(self, renderEnv):
+    def PlayGame(self):
         """
         Funtion to play gym game and fill Playmemory list
-        param bool renderEnv: render enviroment or not
         returns List Playmemory with state_frame, N_action, Qvalues, reward, state
         """
         # Create list to append game data [state_frame, N_action, Qvalues, reward, state]
@@ -265,10 +280,10 @@ class Agent:
         while not (end_episode):
 
             # Render enviroment to screen if renderEnv is True
-            if renderEnv:
+            if self.renderEnv:
                 self.env.render()
                 # sleep so the rendered image does not disappear too fast
-                time.sleep(0.01)
+                time.sleep(0.02)
 
             # Get the lenght of the list to get the last state
             num_states = len(PlayMemory)-1
@@ -304,13 +319,20 @@ class Agent:
 
             reward_total += reward
 
+            # if the agent did not get any rewards, it will be punished
+            # so the agent does not settle for any reward he has get in the past
+
+            if reward == 0:
+                reward == -0.001
+            
+
             PlayMemory.append([state_frame, N_action, Qvalues, reward, state])
 
         # Return PlayMemory and some data to be displayed while training
-        # First two rows are discarded as they are dummy data
+        # First two rows are discarded, they are dummy data
         return PlayMemory[2:len(PlayMemory)], reward_total, Qvalues
 
-    def LearnToPlay(self, renderEnv):
+    def LearnToPlay(self):
         """
         Learn to play, it uses an infinity loop
         param bool renderEnv: render enviroment or not
@@ -340,7 +362,7 @@ class Agent:
             for _ in range(self.NumGamesEp):
 
                 # Play game and get data
-                PlayMemory, reward_ep, Qvalues_ep = self.PlayGame(renderEnv)
+                PlayMemory, reward_ep, Qvalues_ep = self.PlayGame()
 
                 # sum to get the mean after
                 reward_ep_total += reward_ep
@@ -360,9 +382,7 @@ class Agent:
 
 
             print()
-            print("Epsilon : {} Median Points : {} Median QValues : {}".format(round(self.epsilon,2),
-            round(mean_pointsep,2),
-            round(mean_qvaluesep,2)))
+            print(f"Epsilon : {self.epsilon:.2f} Mean Points : {mean_pointsep:.2f} Mean QValues : {mean_qvaluesep:.2f}")
             print()
             print("Optimizing Model")
             print()
@@ -372,7 +392,7 @@ class Agent:
             else:
                 self.model.fit(x = States, y = ActionsValues, epochs = self.NumEpochs)
             print()
-            print("Done playing {} game(s)! Will start another round. Press CTRL + C to stop training".format(self.NumGamesEp))
+            print(f"Done playing {self.NumGamesEp} game(s)! Will start another round. Press CTRL + C to stop training")
             print()
 
             if self.epsilon > self.epsilon_min:
@@ -381,35 +401,36 @@ class Agent:
             if self.SaveWeights_inTraining:
                 self.model.save('model_Agent_DQN.h5')
 
-    def JustPlay(self, renderEnv, NumGames):
+    def JustPlay(self, NumGames):
         for _ in range(NumGames):
 
-            _  = self.PlayGame(renderEnv)
+            _  = self.PlayGame()
 
-def main(Agent):
+
+if __name__ == "__main__":
+    
+
+    envName = 'Breakout-v0'
 
     if sys.argv[1] == 'train':
 
-        Agent.LearnToPlay(renderEnv = False)
+        Agent = Agent(envName = envName, renderEnv = False)
+        Agent.LearnToPlay()
 
     elif sys.argv[1] == 'play':
 
-        Agent.JustPlay(NumGames = 5, renderEnv = True)
+        Agent = Agent(envName = envName, renderEnv = True)
+        Agent.JustPlay(NumGames = 5)
 
     elif sys.argv[1] == 'loadandplay':
 
+        Agent = Agent(envName = envName, renderEnv = False)
         try:
             Agent.load()
         except:
             print('Could not load weights in model_Agent_DQN.h5')
 
-        Agent.JustPlay(NumGames = 5, renderEnv = True)
+        Agent.JustPlay(NumGames = 5)
 
     else:
         raise Exception('Invalid argument, choose train play or loadandplay (need wights in file model_Agent_DQN.h5)')
-
-if __name__ == "__main__":
-
-    envName = 'Breakout-v0'
-    Agent = Agent(envName)
-    main(Agent)
