@@ -9,7 +9,8 @@
 #
 # To play a round of five games using weights in model_Agent_DQN.h5 file
 # $ python DQN.py loadandplay
-#
+# 
+# training usually takes about 3 GB of ram
 # If you get crashes or the code is using too much RAM, try rducing NumGamesEp
 
 
@@ -323,7 +324,7 @@ class Agent:
             # so the agent does not settle for any reward he has get in the past
 
             if reward == 0:
-                reward == -0.001
+                reward == -0.1
             
 
             PlayMemory.append([state_frame, N_action, Qvalues, reward, state])
@@ -408,9 +409,15 @@ class Agent:
 
 
 if __name__ == "__main__":
-    
 
+    # We need two global variables, they will be calculated in learntoplay function and loged in computemetrics class
+    mean_pointsep = mean_qvaluesep = 0
+    
+    # You can try change the enviroment, they should all work
+    # you can see the list of avaliable enviroments here : https://gym.openai.com/envs/#atari
     envName = 'Breakout-v0'
+    # You can also change the number of games the agent will play in 'play' and 'loadandplay' modes
+    NumGames = 5
 
     if sys.argv[1] == 'train':
 
@@ -420,7 +427,7 @@ if __name__ == "__main__":
     elif sys.argv[1] == 'play':
 
         Agent = Agent(envName = envName, renderEnv = True)
-        Agent.JustPlay(NumGames = 5)
+        Agent.JustPlay(NumGames = NumGames)
 
     elif sys.argv[1] == 'loadandplay':
 
@@ -430,7 +437,7 @@ if __name__ == "__main__":
         except:
             print('Could not load weights in model_Agent_DQN.h5')
 
-        Agent.JustPlay(NumGames = 5)
+        Agent.JustPlay(NumGames = NumGames)
 
     else:
         raise Exception('Invalid argument, choose train play or loadandplay (need wights in file model_Agent_DQN.h5)')
