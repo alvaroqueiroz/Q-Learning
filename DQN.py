@@ -29,6 +29,66 @@ import gym
 from keras.callbacks import Callback
 
 
+class LongTermMemory:
+    """
+    Class that implements log term memory
+    """
+
+    def __init__(self, memorySize=50000):
+
+        self.memorySize = memorySize
+        self.saveSampleSize = 600
+        self.sampleMemorySize = 500
+
+        statedim = getattr(agent, 'state_size')
+        statedim.insert(0, 1)
+
+        self.statesMemory = np.zeros(shape=(statedim))
+        self.qValuesMemory = np.zeros(shape=(1, getattr(agent, 'action_size')))
+
+    def addMemory(self, statesList, qValuesList):
+        """
+        Samples memory game play and add it to logtermmemory file
+        """
+
+        # ramdomly sample the memory gameplay to save in permanent memory
+
+        statesSample = statesList[np.random.choice(
+            statesList.shape[0], self.saveSampleSize, replace=False)]
+        qValuesSample = qValuesList[np.random.choice(
+            qValuesList.shape[0], self.saveSampleSize, replace=False)]
+
+        lenghmem = self.qValuesMemory.shape[0]
+
+        if lenghmem < self.memorySize:
+
+            self.statesMemory = np.append(
+                self.statesMemory, statesSample,  axis=0)
+            self.qValuesMemory = np.append(
+                self.qValuesMemory, qValuesSample,  axis=0)
+
+        else:
+
+            for i in range(self.saveSampleSize):
+
+                self.statesMemory[np.random.randint(
+                    low=0, high=lenghmem)] = statesSample[i]
+                self.qValuesMemory[np.random.randint(
+                    low=0, high=lenghmem)] = qValuesSample[i]
+
+    def getMemorySample(self):
+
+        statesMemory = self.statesMemory[1:]
+        qValuesMemory = self.qValuesMemory[1:]
+
+        statesMemorySample = statesMemory[np.random.choice(
+            statesMemory.shape[0], self.sampleMemorySize, replace=False)]
+        qValuesMemorySample = qValuesMemory[np.random.choice(
+            qValuesMemory.shape[0], self.sampleMemorySize, replace=False)]
+
+        return statesMemorySample, qValuesMemorySample
+
+
 class ComputeMetrics(Callback):
     """
     Class that inherits from keras Callback to add log fields mean_pointsep, mean_qvaluesep and epsilon to log
@@ -44,7 +104,7 @@ class ComputeMetrics(Callback):
         # They are very important to see if the training is allright and corverging
         logs['mean_pointsep'] = mean_pointsep
         logs['mean_qvaluesep'] = mean_qvaluesep
-        logs['epsilon'] = getattr(Agent, 'epsilon')
+        logs['epsilon'] = getattr(agent, 'epsilon')
 
 
 class Agent:
@@ -61,7 +121,7 @@ class Agent:
         """
 
         # Compile enviroment
-        self.env = self.MakeEnvironment(envName)
+        self.env = self.makeEnvironment(envName)
         # This will get the number of possible actions for the current enviroment
         self.action_size = self.env.action_space.n
         # Each image is 84x84, each state is composed by 3 images so the NN can recognize patters in movement
@@ -81,16 +141,16 @@ class Agent:
         # Agent NN is set by defoult, but can also be set using setModel method
         self.model = self._build_model()
         # Number of games for each episode before training
-        self.NumGamesEp = 30
+        self.numGamesEp = 30
         # number of epochs in training phase
-        self.NumEpochs = 3
+        self.numEpochs = 3
         # Number of samples taken for the gameplay memory for training
         self.sampleSize = 2000
         # Save weights during training
         # Allowing to sabe wights every iteration will slow down training, but is safer...
         self.SaveWeights_inTraining = False
         # Record matrics in logs folder for use in Tensorboard
-        self.RecordMetrics = True
+        self.recordMetrics = True
         # if the env will be rendered or not
         self.renderEnv = renderEnv
 
@@ -116,7 +176,7 @@ class Agent:
         """
         self.epsilon = epsilon
 
-    def MakeEnvironment(self, envName):
+    def makeEnvironment(self, envName):
         """
         param envName: name of gym enviroment
         returns enviroment 'compiled'
@@ -198,7 +258,7 @@ class Agent:
                       metrics=['mae'])
         return model
 
-    def NormalizeImage(self, observation):
+    def normalizeImage(self, observation):
         """
         Takes image as numpy array and put it in gray scale and recises it and normalize it /255
         param observation: image numpy array
@@ -214,10 +274,10 @@ class Agent:
         # So we divede the entire numpy array by 255
         return np.reshape(observation, (84, 84, 1))/255
 
-    def SampleandUpdateQValues(self, PlayMemory):
+    def sampleandUpdateQValues(self, playMemory):
         """
-        Takes  list Playmemory and returns data for training after sampling and calculeting Actionvalues
-        param List PlayMemory: list with state_frame, N_action, Qvalues, reward, state
+        Takes  list playMemory and returns data for training after sampling and calculeting Actionvalues
+        param List playMemory: list with state_frame, N_action, Qvalues, reward, state
         Returns 2 numpy arrays states and qvalues
         """
         # It is always wise to to use functions/methods to do just one job each, but for simplicity and to optimize run time
@@ -228,49 +288,49 @@ class Agent:
         # This way we add one dimension to the training data  (batch dim)
         QValuesList = []
 
-        # Loop over Playmemory to calculate new Q-values
+        # Loop over playMemory to calculate new Q-values
         # The last state of the game is discarded, it cannot be updated using the Q-learning equation
         for _ in range(self.sampleSize):
 
             # get an index for sampling at random
             # We cannot use the last state in the array because it does not have next state
             # that we need to update its Q-values
-            randomindex = np.random.randint(low=0, high=len(PlayMemory)-1)
+            randomindex = np.random.randint(low=0, high=len(playMemory)-1)
 
             # [state_frame, N_action, Qvalues, reward, state]
-            # Get the data from playmemory to update ActionValues
-            Qvalues = PlayMemory[randomindex][2]
-            ActionTaken = PlayMemory[randomindex][1]
-            Reward = PlayMemory[randomindex][3]
+            # Get the data from playMemory to update ActionValues
+            Qvalues = playMemory[randomindex][2]
+            ActionTaken = playMemory[randomindex][1]
+            Reward = playMemory[randomindex][3]
             # Max Qvalue for the next frame
-            MaxNextState = np.max(PlayMemory[randomindex+1][2])
+            MaxNextState = np.max(playMemory[randomindex+1][2])
 
             # Q-Learning iterative equation https://en.wikipedia.org/wiki/Q-learning
             Qvalues[ActionTaken] = Qvalues[ActionTaken] + self.learning_rate * \
                 (Reward + self.gamma*MaxNextState - Qvalues[ActionTaken])
 
             # add Sampled data to training data
-            StatesList.append(PlayMemory[randomindex][4])
+            StatesList.append(playMemory[randomindex][4])
             QValuesList.append(np.array(Qvalues))
 
             # Delete the row used, so it cannot be sampled again
-            PlayMemory = np.delete(PlayMemory, randomindex, axis=0)
+            playMemory = np.delete(playMemory, randomindex, axis=0)
 
         # For training, data must be in numpy arrays
         return np.array(StatesList), np.array(QValuesList)
 
-    def PlayGame(self):
+    def playGame(self):
         """
-        Funtion to play gym game and fill Playmemory list
-        returns List Playmemory with state_frame, N_action, Qvalues, reward, state
+        Funtion to play gym game and fill playMemory list
+        returns List playMemory with state_frame, N_action, Qvalues, reward, state
         """
         # Create list to append game data [state_frame, N_action, Qvalues, reward, state]
-        PlayMemory = []
+        playMemory = []
 
         # Reset enviroment to start new game
         self.env.reset()
 
-        # Inicial Q values to start Playmemory and make first state (Dummy values)
+        # Inicial Q values to start playMemory and make first state (Dummy values)
         initQvalues = [0, 0, 0, 0]
 
         # First dummy value with random action
@@ -280,20 +340,20 @@ class Agent:
         # Get image frame, reward
         img, reward, end_episode, _ = self.env.step(action=N_action)
         # preprocess and normalize image
-        state_frame = np.array(self.NormalizeImage(img))
+        state_frame = np.array(self.normalizeImage(img))
         dummystate = np.dstack([state_frame, state_frame, state_frame])
 
         # Append the dummy row
-        PlayMemory.append(
+        playMemory.append(
             [state_frame, N_action, initQvalues, reward, dummystate])
 
         # Another one
         N_action = np.random.randint(low=0, high=self.action_size)
         img, reward, end_episode, _ = self.env.step(action=N_action)
-        state_frame = np.array(self.NormalizeImage(img))
+        state_frame = np.array(self.normalizeImage(img))
         dummystate = np.dstack([state_frame, state_frame, state_frame])
 
-        PlayMemory.append(
+        playMemory.append(
             [state_frame, N_action, initQvalues, reward, dummystate])
 
         # Sum reward to log in callback
@@ -309,12 +369,12 @@ class Agent:
                 time.sleep(0.02)
 
             # Get the lenght of the list to get the last state
-            num_states = len(PlayMemory)-1
+            num_states = len(playMemory)-1
 
             # the state will be the stack of three frames, the three last ones are the current state
-            state = np.dstack([PlayMemory[num_states-2][0],
-                               PlayMemory[num_states-1][0],
-                               PlayMemory[num_states][0]])
+            state = np.dstack([playMemory[num_states-2][0],
+                               playMemory[num_states-1][0],
+                               playMemory[num_states][0]])
 
             # Expand dimension so we can use the model to predict the Qvalues for the current state
             state_pred = np.expand_dims(state, axis=0)
@@ -338,7 +398,7 @@ class Agent:
             # Step eviroment
             # Takes the action and observe reward
             img, reward, end_episode, _ = self.env.step(action=N_action)
-            state_frame = np.array(self.NormalizeImage(img))
+            state_frame = np.array(self.normalizeImage(img))
 
             reward_total += reward
 
@@ -346,15 +406,15 @@ class Agent:
             # so the agent does not settle for any reward he has get in the past
 
             if reward == 0:
-                reward == -0.1
+                reward = -0.1
 
-            PlayMemory.append([state_frame, N_action, Qvalues, reward, state])
+            playMemory.append([state_frame, N_action, Qvalues, reward, state])
 
-        # Return PlayMemory and some data to be displayed while training
+        # Return playMemory and some data to be displayed while training
         # First two rows are discarded, they are dummy data
-        return PlayMemory[2:len(PlayMemory)], reward_total, Qvalues
+        return playMemory[2:len(playMemory)], reward_total, Qvalues
 
-    def LearnToPlay(self):
+    def learnToPlay(self):
         """
         Learn to play, it uses an infinity loop
         param bool renderEnv: render enviroment or not
@@ -379,32 +439,39 @@ class Agent:
             Qvalues_ep_total = np.array([0, 0, 0, 0])
 
             # List to append Q matrix of each game
-            TotalPlayMemory = []
+            TotalplayMemory = []
 
             # Each game episode generates the training data for one training section
-            for _ in range(self.NumGamesEp):
+            for _ in range(self.numGamesEp):
 
                 # Play game and get data
-                PlayMemory, reward_ep, Qvalues_ep = self.PlayGame()
+                playMemory, reward_ep, Qvalues_ep = self.playGame()
 
                 # sum to get the mean after
                 reward_ep_total += reward_ep
                 Qvalues_ep_total = np.add(Qvalues_ep_total, Qvalues_ep)
 
                 # We will append the play memory to the total
-                # The TotalPlayMemory will be used to train the NN after we update its Qvalues
-                TotalPlayMemory += PlayMemory
+                # The TotalplayMemory will be used to train the NN after we update its Qvalues
+                TotalplayMemory += playMemory
 
             # Calculate de the mean points and qvalues for the episode
-            mean_pointsep = reward_ep_total/self.NumGamesEp
-            mean_qvaluesep = np.mean(Qvalues_ep_total)/self.NumGamesEp
+            mean_pointsep = reward_ep_total/self.numGamesEp
+            mean_qvaluesep = np.mean(Qvalues_ep_total)/self.numGamesEp
 
             # Here we update the Qvalues using the Q-Learning iterative equation
             # and prepare data for training
-            # This function only returns sampled playmemory
+            # This function only returns sampled playMemory
             # if all memory is used for training, the agent does not converge for correletion in data issues
-            States, ActionsValues = self.SampleandUpdateQValues(
-                TotalPlayMemory)
+            states, actionsValues = self.sampleandUpdateQValues(
+                TotalplayMemory)
+
+            longTermMemory.addMemory(states, actionsValues)
+
+            statesLTM, actionsValuesLTM = longTermMemory.getMemorySample()
+
+            x = np.append(states, statesLTM,  axis=0)
+            y = np.append(actionsValues, actionsValuesLTM,  axis=0)
 
             print()
             print(
@@ -412,15 +479,15 @@ class Agent:
             print()
             print("Optimizing Model")
             print()
-            if self.RecordMetrics:
-                self.model.fit(x=States, y=ActionsValues, epochs=self.NumEpochs,
+            if self.recordMetrics:
+                self.model.fit(x=x, y=y, epochs=self.numEpochs,
                                callbacks=[ComputeMetrics(), TensorboadCallback])
             else:
-                self.model.fit(x=States, y=ActionsValues,
-                               epochs=self.NumEpochs)
+                self.model.fit(x=x, y=y,
+                               epochs=self.numEpochs)
             print()
             print(
-                f"Done playing {self.NumGamesEp} game(s)! Will start another round. Press CTRL + C to stop training")
+                f"Done playing {self.numGamesEp} game(s)! Will start another round. Press CTRL + C to stop training")
             print()
 
             if self.epsilon > self.epsilon_min:
@@ -429,10 +496,10 @@ class Agent:
             if self.SaveWeights_inTraining:
                 self.model.save('model_Agent_DQN.h5')
 
-    def JustPlay(self, NumGames):
+    def justPlay(self, NumGames):
         for _ in range(NumGames):
 
-            _ = self.PlayGame()
+            _ = self.playGame()
 
 
 if __name__ == "__main__":
@@ -444,29 +511,29 @@ if __name__ == "__main__":
     # you can see the list of avaliable enviroments here : https://gym.openai.com/envs/#atari
     envName = 'Breakout-v0'
     # You can also change the number of games the agent will play in 'play' and 'loadandplay' modes
-    NumGames = 5
+    numGames = 5
 
     if sys.argv[1] == 'train':
 
-        Agent = Agent(envName=envName, renderEnv=False)
-        Agent.LearnToPlay()
+        agent = Agent(envName=envName, renderEnv=False)
+        longTermMemory = LongTermMemory()
+        agent.learnToPlay()
 
     elif sys.argv[1] == 'play':
 
-        Agent = Agent(envName=envName, renderEnv=True)
-        Agent.JustPlay(NumGames=NumGames)
+        agent = Agent(envName=envName, renderEnv=True)
+        agent.justPlay(NumGames=numGames)
 
     elif sys.argv[1] == 'loadandplay':
 
-        Agent = Agent(envName=envName, renderEnv=False)
+        agent = Agent(envName=envName, renderEnv=False)
         try:
-            Agent.load()
+            agent.load()
         except:
             print('Could not load weights in model_Agent_DQN.h5')
 
-        Agent.JustPlay(NumGames=NumGames)
+        agent.justPlay(NumGames=numGames)
 
     else:
         raise Exception(
             'Invalid argument, choose train play or loadandplay (need wights in file model_Agent_DQN.h5)')
-            
