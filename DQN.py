@@ -12,6 +12,10 @@
 #
 # training usually takes about 3 GB of ram
 # If you get crashes or the code is using too much RAM, try rducing NumGamesEp
+#
+# You should keep an eye in tensorboard to see how training is going
+# you can use tensorboard --logdir log/
+# then tensorboard will be avaliable at localhost:6006
 
 
 import keras
@@ -34,57 +38,83 @@ class LongTermMemory:
     Class that implements log term memory
     """
 
-    def __init__(self, memorySize=50000):
+    def __init__(self, memorySize=25000):
 
+        # number of states/qvalues in long term memory
         self.memorySize = memorySize
-        self.saveSampleSize = 600
-        self.sampleMemorySize = 500
+        # size of the sample of states/qvalues saved each iteration
+        self.saveSampleSize = 2000
+        # size of the sample taken from the LTM for training each iteration
+        self.sampleMemorySize = 2000
 
+        # getting the size of each state
         statedim = getattr(agent, 'state_size')
+        # iserting one in the first dim to match the training dimensions (the first the the number of training sampel e.g: 1)
         statedim.insert(0, 1)
 
-        self.statesMemory = np.zeros(shape=(statedim))
+        # state dimension for training eg: 1x84x84x3
+        self.statedim = statedim
+
+        #  first state will be filled with zeros
+        self.statesMemory = np.zeros(shape=(self.statedim))
+
+        # first qvalues will be zeros
         self.qValuesMemory = np.zeros(shape=(1, getattr(agent, 'action_size')))
 
     def addMemory(self, statesList, qValuesList):
         """
-        Samples memory game play and add it to logtermmemory file
+        Samples memory game play and add it to logtermmemory
         """
 
         # ramdomly sample the memory gameplay to save in permanent memory
-
         statesSample = statesList[np.random.choice(
             statesList.shape[0], self.saveSampleSize, replace=False)]
+
         qValuesSample = qValuesList[np.random.choice(
             qValuesList.shape[0], self.saveSampleSize, replace=False)]
 
+        # get the size of the permanent memory
         lenghmem = self.qValuesMemory.shape[0]
 
+        # if its not full, new memory will be appended
         if lenghmem < self.memorySize:
 
             self.statesMemory = np.append(
                 self.statesMemory, statesSample,  axis=0)
+
             self.qValuesMemory = np.append(
                 self.qValuesMemory, qValuesSample,  axis=0)
 
+        # if it is full, the new memory will be put in random locations in the LTM
         else:
 
             for i in range(self.saveSampleSize):
 
                 self.statesMemory[np.random.randint(
-                    low=0, high=lenghmem)] = statesSample[i]
+                    low=0, high=lenghmem-1)] = statesSample[i]
+
                 self.qValuesMemory[np.random.randint(
-                    low=0, high=lenghmem)] = qValuesSample[i]
+                    low=0, high=lenghmem-1)] = qValuesSample[i]
 
     def getMemorySample(self):
+        """
+        Samples memory and returns numpy array with data for training
+        output: two numpy arrays [statesMemorySample, qValuesMemorySample]
+        """
 
-        statesMemory = self.statesMemory[1:]
-        qValuesMemory = self.qValuesMemory[1:]
+        # if the first item of LTM is all zeros, we delete it
+        # i've initialized it with zeros to make the code clearer
+        if not self.statesMemory[0].any():
 
-        statesMemorySample = statesMemory[np.random.choice(
-            statesMemory.shape[0], self.sampleMemorySize, replace=False)]
-        qValuesMemorySample = qValuesMemory[np.random.choice(
-            qValuesMemory.shape[0], self.sampleMemorySize, replace=False)]
+            self.statesMemory = self.statesMemory[1:]
+            self.qValuesMemory = self.qValuesMemory[1:]
+
+        # sample LTM without replacing
+        statesMemorySample = self.statesMemory[np.random.choice(
+            self.statesMemory.shape[0], self.sampleMemorySize, replace=False)]
+
+        qValuesMemorySample = self.qValuesMemory[np.random.choice(
+            self.qValuesMemory.shape[0], self.sampleMemorySize, replace=False)]
 
         return statesMemorySample, qValuesMemorySample
 
@@ -127,7 +157,7 @@ class Agent:
         # Each image is 84x84, each state is composed by 3 images so the NN can recognize patters in movement
         self.state_size = [84, 84, 3]
         # Rate of consideration for future rewards for the agent
-        self.gamma = 0.9
+        self.gamma = 0.8
         # Initial rate at which the Agent Takes random action
         self.epsilon = 1
         # Final rate at which the Agent Takes random action
@@ -135,13 +165,13 @@ class Agent:
         # Rate of decay of epsilon for each game episode
         self.epsilon_decay = 0.995
         # Learning rate for the optimizer ( Normally Adam)
-        self.learning_rate_optimizer = 0.0001
+        self.learning_rate_optimizer = 0.001
         # Learning rate for the Agent see Q-Learning equation https://en.wikipedia.org/wiki/Q-learning
-        self.learning_rate = 0.3
+        self.learning_rate = 0.1
         # Agent NN is set by defoult, but can also be set using setModel method
         self.model = self._build_model()
         # Number of games for each episode before training
-        self.numGamesEp = 30
+        self.numGamesEp = 20
         # number of epochs in training phase
         self.numEpochs = 3
         # Number of samples taken for the gameplay memory for training
@@ -161,7 +191,7 @@ class Agent:
         """
         self.model = model
         # I've had some problem in recording metrics with custom models, to avoid that...
-        self.RecordMetrics = False
+        self.recordMetrics = False
 
     def getEpsilon(self):
         """
@@ -406,7 +436,7 @@ class Agent:
             # so the agent does not settle for any reward he has get in the past
 
             if reward == 0:
-                reward = -0.1
+                reward = -0.01
 
             playMemory.append([state_frame, N_action, Qvalues, reward, state])
 
@@ -470,8 +500,8 @@ class Agent:
 
             statesLTM, actionsValuesLTM = longTermMemory.getMemorySample()
 
-            x = np.append(states, statesLTM,  axis=0)
-            y = np.append(actionsValues, actionsValuesLTM,  axis=0)
+            x = np.append(states[1500:], statesLTM,  axis=0)
+            y = np.append(actionsValues[1500:], actionsValuesLTM,  axis=0)
 
             print()
             print(
@@ -490,16 +520,19 @@ class Agent:
                 f"Done playing {self.numGamesEp} game(s)! Will start another round. Press CTRL + C to stop training")
             print()
 
+            # apply decay to epsilon if it has not reached its minimum value
             if self.epsilon > self.epsilon_min:
                 self.epsilon *= self.epsilon_decay
 
+            # Save weights to file, this option will slow training
             if self.SaveWeights_inTraining:
+
                 self.model.save('model_Agent_DQN.h5')
 
-    def justPlay(self, NumGames):
-        for _ in range(NumGames):
+    def justPlay(self, numGames):
+        for _ in range(numGames):
 
-            _ = self.playGame()
+            self.playGame()
 
 
 if __name__ == "__main__":
@@ -522,7 +555,7 @@ if __name__ == "__main__":
     elif sys.argv[1] == 'play':
 
         agent = Agent(envName=envName, renderEnv=True)
-        agent.justPlay(NumGames=numGames)
+        agent.justPlay(numGames=numGames)
 
     elif sys.argv[1] == 'loadandplay':
 
@@ -532,8 +565,8 @@ if __name__ == "__main__":
         except:
             print('Could not load weights in model_Agent_DQN.h5')
 
-        agent.justPlay(NumGames=numGames)
+        agent.justPlay(numGames=numGames)
 
     else:
         raise Exception(
-            'Invalid argument, choose train play or loadandplay (need wights in file model_Agent_DQN.h5)')
+            'Invalid argument, choose train, play or loadandplay (need wights in file model_Agent_DQN.h5)')
